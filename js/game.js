@@ -1,6 +1,7 @@
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const touchPad = document.getElementById("touchPad");
+const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
 
 canvas.width = 640;
 canvas.height = 480;
@@ -45,6 +46,61 @@ let bossActive = false;
 let waveTransitionTimer = 0;
 let waveIntroText = "";
 let gameWon = false;
+
+
+
+function setShadow(ctx, blur, color) {
+    if (isMobile) {
+        ctx.shadowBlur = 0;
+        return;
+    }
+    ctx.shadowBlur = blur;
+    ctx.shadowColor = color;
+}
+
+
+
+// =========================
+// MÚSICA
+// =========================
+const bgMusic = new Audio("sounds/music.wav");
+bgMusic.loop = true;
+bgMusic.volume = 0.04;
+
+function playMusic() {
+    bgMusic.play();
+}
+
+function stopMusic() {
+    bgMusic.pause();
+    bgMusic.currentTime = 0;
+}
+
+
+// =========================
+// ÁUDIO
+// =========================
+const shootSound = new Audio("sounds/shoot.wav");
+shootSound.volume = 0.01;
+
+// Permite múltiplos tiros simultâneos
+function playShootSound() {
+    const s = shootSound.cloneNode();
+    s.volume = shootSound.volume;
+    s.play();
+}
+
+
+const hitSound = new Audio("sounds/hit.wav");
+hitSound.volume = 0.01;
+
+function playHitSound() {
+    const s = hitSound.cloneNode();
+    s.volume = hitSound.volume;
+    s.play();
+}
+
+
 
 const stages = [
     {
@@ -112,6 +168,7 @@ touchPad.addEventListener("touchcancel", (e) => {
 // INÍCIO
 // =========================
 function startGame() {
+    playMusic();
     player = {
         x: 60,
         y: canvas.height / 2 - 12,
@@ -317,6 +374,7 @@ function update(delta) {
     if (hp <= 0) {
         hp = 0;
         running = false;
+        stopMusic();
 
         if (score > highScore) {
             highScore = score;
@@ -335,17 +393,17 @@ function updatePlayer(delta) {
     if (keys["d"] || keys["arrowright"]) player.x += player.speed;
 
     if (touchActive) {
-    const sensitivity = 1.0;
+        const sensitivity = 1.0;
 
-    const deltaX = touchX - lastTouchX;
-    const deltaY = touchY - lastTouchY;
+        const deltaX = touchX - lastTouchX;
+        const deltaY = touchY - lastTouchY;
 
-    player.x += deltaX * sensitivity;
-    player.y += deltaY * sensitivity;
+        player.x += deltaX * sensitivity;
+        player.y += deltaY * sensitivity;
 
-    lastTouchX = touchX;
-    lastTouchY = touchY;
-}
+        lastTouchX = touchX;
+        lastTouchY = touchY;
+    }
 
 
     player.x = Math.max(12, Math.min(canvas.width - player.w - 12, player.x));
@@ -367,12 +425,56 @@ function updateBullets(delta) {
     }
 }
 
+
+function explodeBullet(b) {
+    const speed = 3.2;
+
+    const directions = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [0.7, 0.7],
+        [0.7, -0.7],
+        [-0.7, 0.7],
+        [-0.7, -0.7]
+    ];
+
+    directions.forEach(d => {
+        enemyBullets.push({
+            x: b.x,
+            y: b.y,
+            vx: d[0] * speed,
+            vy: d[1] * speed,
+            size: 5,
+            fromExplosion: true
+        });
+    });
+
+    // efeito visual
+    createExplosion(b.x, b.y, "#ff5a7a");
+}
+
 function updateEnemyBullets() {
     for (let i = enemyBullets.length - 1; i >= 0; i--) {
         const b = enemyBullets[i];
 
         b.x += b.vx;
         b.y += b.vy;
+
+        if (b.explosive) {
+            b.pulse = (b.pulse || 0) + 0.1;
+        }
+
+
+
+        // PROJÉTIL EXPLOSIVO
+        if (b.explosive && b.x <= canvas.width / 2) {
+            explodeBullet(b);
+            enemyBullets.splice(i, 1);
+            continue;
+        }
+
 
         if (b.x < -20 || b.y < -20 || b.y > canvas.height + 20) {
             enemyBullets.splice(i, 1);
@@ -449,6 +551,7 @@ function updateEnemies(delta) {
         for (let j = bullets.length - 1; j >= 0; j--) {
             if (hit(bullets[j], e)) {
                 bullets.splice(j, 1);
+                playHitSound();
 
                 if (e.isBoss) {
                     e.hp -= 4;
@@ -489,6 +592,7 @@ function updateEnemies(delta) {
 }
 
 function updateBoss(boss, delta) {
+    boss.specialTimer += delta;
     const targetX = boss.bossType === "boss2" ? canvas.width - 190 : canvas.width - 170;
 
     if (boss.x > targetX) {
@@ -513,6 +617,7 @@ function updateBoss(boss, delta) {
         if (boss.shootTimer >= 1.2) {
             boss.shootTimer = 0;
 
+            // TIROS NORMAIS
             enemyBullets.push({
                 x: boss.x,
                 y: boss.y + boss.h / 2,
@@ -536,6 +641,20 @@ function updateBoss(boss, delta) {
                 vy: 1.2,
                 size: 5
             });
+
+            if (boss.hp <= boss.maxHp / 2 && boss.specialTimer >= 2.5) {
+                boss.specialTimer = 0;
+
+                enemyBullets.push({
+                    x: boss.x,
+                    y: boss.y + boss.h / 2,
+                    vx: -2.2,
+                    vy: 0,
+                    size: 7,
+                    explosive: true,
+                    pulse: 0
+                });
+            }
         }
     }
 
@@ -633,13 +752,14 @@ function spawnWaveEnemy(type) {
 function spawnBoss(type) {
     if (type === "boss1") {
         enemies.push({
+            specialTimer: 0,
             id: `boss-${stage}-${wave}`,
             x: canvas.width + 120,
             y: canvas.height / 2 - 60,
             w: 110,
             h: 90,
-            hp: 600,
-            maxHp: 600,
+            hp: 350,
+            maxHp: 350,
             isBoss: true,
             bossType: "boss1",
             speed: 1.6,
@@ -655,8 +775,8 @@ function spawnBoss(type) {
             y: canvas.height / 2 - 70,
             w: 130,
             h: 110,
-            hp: 900,
-            maxHp: 900,
+            hp: 500,
+            maxHp: 500,
             isBoss: true,
             bossType: "boss2",
             speed: 2.0,
@@ -720,6 +840,21 @@ function updateBackground() {
     });
 }
 
+
+function initAudioAndStart() {
+    shootSound.play().then(() => {
+        shootSound.pause();
+        shootSound.currentTime = 0;
+
+        playMusic();
+        startGame();
+    }).catch(() => {
+        startGame();
+    });
+}
+
+
+
 function fireBullet() {
     bullets.push({
         x: player.x + player.w - 2,
@@ -728,6 +863,8 @@ function fireBullet() {
         h: 4,
         speed: 9
     });
+
+    playShootSound();
 
     particles.push({
         x: player.x + player.w + 4,
@@ -889,7 +1026,7 @@ function drawBackground() {
     });
 
     stars.forEach(s => {
-        ctx.shadowBlur = 10;
+        setShadow(ctx, 20, "rgba(255,100,180,0.7)");
         ctx.shadowColor = isStage2 ? "rgba(255,100,180,0.7)" : "rgba(100,220,255,0.8)";
         ctx.fillStyle = `rgba(240,250,255,${s.alpha})`;
         ctx.beginPath();
@@ -897,7 +1034,7 @@ function drawBackground() {
         ctx.fill();
     });
 
-    ctx.shadowBlur = 0;
+    const newLocal = ctx.shadowBlur = 0;
 }
 
 function drawPlayer() {
@@ -908,7 +1045,7 @@ function drawPlayer() {
         ctx.globalAlpha = 0.45;
     }
 
-    ctx.shadowBlur = 24;
+    setShadow(ctx, 20, "#00ffff");
     ctx.shadowColor = player.hitFlash > 0 ? "#ffffff" : "#00e5ff";
 
     ctx.fillStyle = player.hitFlash > 0 ? "#ffffff" : "#4fc3ff";
@@ -939,8 +1076,7 @@ function drawPlayer() {
     ctx.closePath();
     ctx.fill();
 
-    ctx.shadowBlur = 16;
-    ctx.shadowColor = "#ffffff";
+    setShadow(ctx, 20, "#ffffff");
     ctx.fillStyle = "#e9fdff";
     ctx.beginPath();
     ctx.ellipse(17, player.h / 2, 5, 4, 0, 0, Math.PI * 2);
@@ -951,7 +1087,7 @@ function drawPlayer() {
     ctx.fillRect(10, 8, 6, 2);
     ctx.fillRect(10, 14, 6, 2);
 
-    ctx.shadowBlur = 22;
+    setShadow(ctx, 20, "#00ffff");
     ctx.shadowColor = "#00ffff";
     const flameLen = 10 + Math.random() * 8;
     const flameGrad = ctx.createLinearGradient(-flameLen, 0, 0, 0);
@@ -974,7 +1110,7 @@ function drawPlayer() {
 
 function drawBullets() {
     bullets.forEach(b => {
-        ctx.shadowBlur = 16;
+        setShadow(ctx, 20, "#00ffff");
         ctx.shadowColor = "#00ffff";
 
         const bulletGrad = ctx.createLinearGradient(b.x - 12, b.y, b.x + b.w, b.y);
@@ -995,13 +1131,44 @@ function drawBullets() {
 
 function drawEnemyBullets() {
     enemyBullets.forEach(b => {
-        ctx.shadowBlur = 14;
-        ctx.shadowColor = "#ff4a70";
-        ctx.fillStyle = "#ff6b88";
 
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
-        ctx.fill();
+        if (b.explosive) {
+            const t = Math.sin(b.pulse * 4) * 0.5 + 0.5;
+
+            // mistura vermelho → amarelo
+            const r = 255;
+            const g = Math.floor(80 + 175 * t);
+            const color = `rgb(${r},${g},0)`;
+
+            setShadow(ctx, 20, "#00ffff");
+            ctx.shadowColor = color;
+            ctx.fillStyle = color;
+
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.size + 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+        } else if (b.fromExplosion) {
+            // 🔥 projéteis amarelos da explosão
+            setShadow(ctx, 20, "#00ffff");
+            ctx.shadowColor = "#ffd84a";
+            ctx.fillStyle = "#ffe066";
+
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+            ctx.fill();
+
+        } else {
+            // padrão antigo
+            setShadow(ctx, 20, "#00ffff");
+            ctx.shadowColor = "#ff4a70";
+            ctx.fillStyle = "#ff6b88";
+
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
     });
 
     ctx.shadowBlur = 0;
@@ -1017,7 +1184,7 @@ function drawEnemies() {
         ctx.save();
         ctx.translate(e.x, e.y);
 
-        ctx.shadowBlur = 18;
+        setShadow(ctx, 20, "#00ffff");
         ctx.shadowColor = "#ff5a7a";
 
         ctx.fillStyle = "#ff5a7a";
@@ -1048,7 +1215,7 @@ function drawEnemies() {
         ctx.closePath();
         ctx.fill();
 
-        ctx.shadowBlur = 12;
+        setShadow(ctx, 20, "#00ffff");
         ctx.shadowColor = "#ffffff";
         ctx.fillStyle = "#ffeaf0";
         ctx.beginPath();
@@ -1073,7 +1240,7 @@ function drawBoss(boss) {
     ctx.save();
     ctx.translate(boss.x, boss.y);
 
-    ctx.shadowBlur = 26;
+    setShadow(ctx, 20, "#00ffff");
     ctx.shadowColor = boss.bossType === "boss2" ? "#ff2d88" : "#ff4068";
 
     const wingGrad = ctx.createLinearGradient(0, 0, boss.w, 0);
@@ -1108,7 +1275,7 @@ function drawBoss(boss) {
     ctx.closePath();
     ctx.fill();
 
-    ctx.shadowBlur = 18;
+    setShadow(ctx, 20, "#00ffff");
     ctx.shadowColor = "#ffffff";
     ctx.fillStyle = "#fff0f4";
     ctx.beginPath();
@@ -1125,7 +1292,7 @@ function drawBoss(boss) {
 function drawParticles() {
     particles.forEach(p => {
         const alpha = Math.max(0, p.life / p.maxLife);
-        ctx.shadowBlur = 12;
+        setShadow(ctx, 20, "#00ffff");
         ctx.shadowColor = `rgba(${p.color}, ${alpha})`;
         ctx.fillStyle = `rgba(${p.color}, ${alpha})`;
 
@@ -1141,7 +1308,7 @@ function drawExplosions() {
     explosions.forEach(ex => {
         const alpha = ex.life / ex.maxLife;
 
-        ctx.shadowBlur = 22;
+        setShadow(ctx, 20, "#00ffff");
         ctx.shadowColor = ex.color;
         ctx.strokeStyle = hexToRgba(ex.color, alpha);
         ctx.lineWidth = 3;
@@ -1188,13 +1355,13 @@ function drawWaveIntro() {
     ctx.globalAlpha = alpha;
     ctx.textAlign = "center";
 
-    ctx.shadowBlur = 20;
+    setShadow(ctx, 20, "#00ffff");
     ctx.shadowColor = stage >= 2 ? "#ff55aa" : "#00ffff";
     ctx.fillStyle = "#eaffff";
     ctx.font = "bold 28px Arial";
     ctx.fillText(`FASE ${stage}`, canvas.width / 2, canvas.height / 2 - 20);
 
-    ctx.shadowBlur = 14;
+    setShadow(ctx, 20, "#00ffff");
     ctx.fillStyle = "rgba(220,245,255,0.92)";
     ctx.font = "18px Arial";
     ctx.fillText(waveIntroText, canvas.width / 2, canvas.height / 2 + 18);
@@ -1214,9 +1381,9 @@ function updateHUD() {
 
 function hit(a, b) {
     return a.x < b.x + b.w &&
-           a.x + a.w > b.x &&
-           a.y < b.y + b.h &&
-           a.y + a.h > b.y;
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y;
 }
 
 function hexToRgba(hex, alpha) {
